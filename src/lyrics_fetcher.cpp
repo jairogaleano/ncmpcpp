@@ -20,6 +20,7 @@
 
 #include "config.h"
 
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <boost/algorithm/string/join.hpp>
@@ -39,6 +40,64 @@
 #include "settings.h"
 #include "utility/html.h"
 #include "utility/string.h"
+
+namespace
+{
+std::string letrasSlug(const std::string &input)
+{
+	struct Accent { const char *from; char to; };
+	static const Accent accents[] = {
+		{ "á", 'a' }, { "à", 'a' }, { "ä", 'a' }, { "â", 'a' }, { "ã", 'a' },
+		{ "é", 'e' }, { "è", 'e' }, { "ë", 'e' }, { "ê", 'e' },
+		{ "í", 'i' }, { "ì", 'i' }, { "ï", 'i' }, { "î", 'i' },
+		{ "ó", 'o' }, { "ò", 'o' }, { "ö", 'o' }, { "ô", 'o' }, { "õ", 'o' },
+		{ "ú", 'u' }, { "ù", 'u' }, { "ü", 'u' }, { "û", 'u' },
+		{ "ñ", 'n' }, { "ç", 'c' }, { "ÿ", 'y' }, { "œ", 'o' }
+	};
+	std::string result;
+	result.reserve(input.size());
+	size_t i = 0;
+	while (i < input.size())
+	{
+		unsigned char c = input[i];
+		if (c < 0x80)
+		{
+			char lc = std::tolower(c);
+			if ((lc >= 'a' && lc <= 'z') || (lc >= '0' && lc <= '9'))
+				result += lc;
+			else if (c == '&')
+				result += "and";
+			else if (!result.empty() && result.back() != '-')
+				result += '-';
+			++i;
+		}
+		else
+		{
+			bool matched = false;
+			for (const Accent &a : accents)
+			{
+				size_t len = std::strlen(a.from);
+				if (i + len <= input.size() && input.compare(i, len, a.from) == 0)
+				{
+					result += a.to;
+					i += len;
+					matched = true;
+					break;
+				}
+			}
+			if (!matched)
+			{
+				if (!result.empty() && result.back() != '-')
+					result += '-';
+				++i;
+			}
+		}
+	}
+	while (!result.empty() && result.back() == '-')
+		result.pop_back();
+	return result;
+}
+}
 
 std::istream &operator>>(std::istream &is, LyricsFetcher_ &fetcher)
 {
@@ -76,12 +135,8 @@ LyricsFetcher::Result LyricsFetcher::fetch(const std::string &artist,
 	Result result;
 	result.first = false;
 	
-	std::string url = urlTemplate();
-	boost::replace_all(url, "%artist%", Curl::escape(artist));
-	boost::replace_all(url, "%title%", Curl::escape(title));
-
 	std::string data;
-	CURLcode code = Curl::perform(data, url, "", true);
+	CURLcode code = Curl::perform(data, buildURL(artist, title), "", true);
 	
 	if (code != CURLE_OK)
 	{
@@ -134,6 +189,19 @@ std::vector<std::string> LyricsFetcher::getContent(const char *regex_,
 		result.push_back(std::move(content));
 	}
 	return result;
+}
+
+std::string LyricsFetcher::buildURL(const std::string &artist, const std::string &title) const
+{
+	std::string url = urlTemplate();
+	boost::replace_all(url, "%artist%", Curl::escape(artist));
+	boost::replace_all(url, "%title%", Curl::escape(title));
+	return url;
+}
+
+std::string LetrasFetcher::buildURL(const std::string &artist, const std::string &title) const
+{
+	return "https://www.letras.com/" + letrasSlug(artist) + "/" + letrasSlug(title) + "/";
 }
 
 void LyricsFetcher::postProcess(std::string &data) const
