@@ -54,6 +54,8 @@ std::istream &operator>>(std::istream &is, LyricsFetcher_ &fetcher)
 		fetcher = std::make_unique<TekstowoFetcher>();
 	else if (s == "zeneszoveg")
 		fetcher = std::make_unique<ZeneszovegFetcher>();
+	else if (s == "letras")
+		fetcher = std::make_unique<LetrasFetcher>();
 	else if (s == "internet")
 		fetcher = std::make_unique<InternetLyricsFetcher>();
 #ifdef HAVE_TAGLIB_H

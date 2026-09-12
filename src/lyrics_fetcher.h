@@ -111,6 +111,15 @@ protected:
 	virtual const char *regex() const override { return "<div class=\"lyrics-plain-text trans_original\">(.*?)</div>"; }
 };
 
+struct LetrasFetcher : public LyricsFetcher
+{
+	virtual const char *name() const override { return "letras.com"; }
+
+protected:
+	virtual const char *urlTemplate() const override { return "https://www.letras.com/%artist%/%title%/"; }
+	virtual const char *regex() const override { return "<div class=\"[^\"]*lyric-original[^\"]*\">(.*?)</div>"; }
+};
+
 struct InternetLyricsFetcher : public GoogleLyricsFetcher
 {
 	virtual const char *name() const override { return "the Internet"; }
