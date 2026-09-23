@@ -122,6 +122,17 @@ protected:
 	virtual const char *regex() const override { return "<div class=\"[^\"]*lyric-original[^\"]*\">(.*?)</div>"; }
 };
 
+struct GeniusFetcher : public LyricsFetcher
+{
+	virtual const char *name() const override { return "genius.com"; }
+	virtual Result fetch(const std::string &artist, const std::string &title, const MPD::Song &song) override;
+
+protected:
+	virtual const char *urlTemplate() const override { return ""; }
+	virtual std::string buildURL(const std::string &artist, const std::string &title) const override;
+	virtual const char *regex() const override { return ""; }
+};
+
 struct InternetLyricsFetcher : public GoogleLyricsFetcher
 {
 	virtual const char *name() const override { return "the Internet"; }

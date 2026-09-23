@@ -162,6 +162,8 @@ bool configure(int argc, char **argv)
 				std::make_tuple("tekstowo", "rihanna", "umbrella"),
 				std::make_tuple("zeneszoveg", "rihanna", "umbrella"),
 				std::make_tuple("letras", "mago de oz", "al-mejandria"),
+				std::make_tuple("genius", "the police", "invisible sun"),
+				std::make_tuple("genius", "mago de oz", "al-mejandria"),
 			};
 			for (auto &data : fetcher_data)
 			{

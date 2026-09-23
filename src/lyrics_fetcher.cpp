@@ -176,6 +176,8 @@ std::istream &operator>>(std::istream &is, LyricsFetcher_ &fetcher)
 		fetcher = std::make_unique<ZeneszovegFetcher>();
 	else if (s == "letras")
 		fetcher = std::make_unique<LetrasFetcher>();
+	else if (s == "genius")
+		fetcher = std::make_unique<GeniusFetcher>();
 	else if (s == "internet")
 		fetcher = std::make_unique<InternetLyricsFetcher>();
 #ifdef HAVE_TAGLIB_H
@@ -325,6 +327,120 @@ std::string LetrasFetcher::buildURL(const std::string &artist, const std::string
 	}
 
 	return fallback;
+}
+
+// Genius URLs son case-sensitive (solo la primera letra de la ruta en
+// mayúscula) y requieren el slug ASCII con guiones simples (reusa letrasSlug).
+std::string GeniusFetcher::buildURL(const std::string &artist, const std::string &title) const
+{
+	std::string slug = letrasSlug(artist);
+	std::string tslug = letrasSlug(title);
+	if (slug.empty() || tslug.empty())
+		return "";
+	slug += '-';
+	slug += tslug;
+	if (slug[0] >= 'a' && slug[0] <= 'z')
+		slug[0] = static_cast<char>(slug[0] - 'a' + 'A');
+	return "https://genius.com/" + slug + "-lyrics";
+}
+
+namespace
+{
+// Desescapa la cadena JS (dentro de JSON.parse('...')) que envuelve el estado
+// pre-cargado de Genius: \' \" \\ \n \t \r vuelven a su carácter literal.
+std::string geniusJsUnescape(const std::string &s)
+{
+	std::string out;
+	out.reserve(s.size());
+	for (size_t i = 0; i < s.size(); ++i)
+	{
+		if (s[i] == '\\' && i + 1 < s.size())
+		{
+			switch (s[++i])
+			{
+				case 'n': out += '\n'; break;
+				case 't': out += '\t'; break;
+				case 'r': out += '\r'; break;
+				default:  out += s[i]; break;
+			}
+		}
+		else
+			out += s[i];
+	}
+	return out;
+}
+}
+
+LyricsFetcher::Result GeniusFetcher::fetch(const std::string &artist,
+                                           const std::string &title,
+                                           const MPD::Song &song)
+{
+	Result result;
+	result.first = false;
+
+	std::string url = buildURL(artist, title);
+	if (url.empty())
+	{
+		result.second = msgNotFound;
+		return result;
+	}
+
+	std::string data;
+	if (Curl::perform(data, url, "", true) != CURLE_OK)
+	{
+		result.second = msgNotFound;
+		return result;
+	}
+
+	// La letra completa vive en window.__PRELOADED_STATE__ = JSON.parse('<json>').
+	const std::string marker = "window.__PRELOADED_STATE__ = JSON.parse('";
+	size_t begin = data.find(marker);
+	if (begin == std::string::npos)
+	{
+		result.second = msgNotFound;
+		return result;
+	}
+	begin += marker.size();
+	size_t end = data.find("');", begin);
+	if (end == std::string::npos)
+	{
+		result.second = msgNotFound;
+		return result;
+	}
+
+	boost::property_tree::ptree root;
+	try
+	{
+		std::istringstream is(geniusJsUnescape(data.substr(begin, end - begin)));
+		boost::property_tree::read_json(is, root);
+	}
+	catch (...)
+	{
+		result.second = msgNotFound;
+		return result;
+	}
+
+	std::string lyrics;
+	try
+	{
+		lyrics = root.get<std::string>("songPage.lyricsData.body.html");
+	}
+	catch (...)
+	{
+		result.second = msgNotFound;
+		return result;
+	}
+
+	postProcess(lyrics);
+	if (lyrics.empty())
+	{
+		result.second = msgNotFound;
+		return result;
+	}
+
+	result.first = true;
+	result.second = lyrics;
+	return result;
 }
 
 void LyricsFetcher::postProcess(std::string &data) const
