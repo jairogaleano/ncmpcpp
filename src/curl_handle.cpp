@@ -41,11 +41,29 @@ CURLcode Curl::perform(std::string &data, const std::string &URL, const std::str
 	curl_easy_setopt(c, CURLOPT_WRITEDATA, &data);
 	curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, timeout);
 	curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1);
+	// Letras.com is behind Akamai bot protection: HTTP/403 unless the request
+	// looks like a real browser (User-Agent + client hints + Sec-Fetch-*).
+	curl_easy_setopt(c, CURLOPT_USERAGENT,
+		"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36");
+	curl_easy_setopt(c, CURLOPT_ACCEPT_ENCODING, "");
+	struct curl_slist *headers = nullptr;
+	headers = curl_slist_append(headers, "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8");
+	headers = curl_slist_append(headers, "Accept-Language: es-ES,es;q=0.9,en;q=0.8");
+	headers = curl_slist_append(headers, "sec-ch-ua: \"Chromium\";v=\"126\", \"Google Chrome\";v=\"126\", \"Not.A/Brand\";v=\"24\"");
+	headers = curl_slist_append(headers, "sec-ch-ua-mobile: ?0");
+	headers = curl_slist_append(headers, "sec-ch-ua-platform: \"Linux\"");
+	headers = curl_slist_append(headers, "Sec-Fetch-Dest: document");
+	headers = curl_slist_append(headers, "Sec-Fetch-Mode: navigate");
+	headers = curl_slist_append(headers, "Sec-Fetch-Site: cross-site");
+	headers = curl_slist_append(headers, "Upgrade-Insecure-Requests: 1");
+	if (headers)
+		curl_easy_setopt(c, CURLOPT_HTTPHEADER, headers);
 	if (follow_redirect)
 		curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
 	if (!referer.empty())
 		curl_easy_setopt(c, CURLOPT_REFERER, referer.c_str());
 	result = curl_easy_perform(c);
+	curl_slist_free_all(headers);
 	curl_easy_cleanup(c);
 	return result;
 }
