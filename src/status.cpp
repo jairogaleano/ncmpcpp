@@ -633,6 +633,17 @@ void Status::Changes::elapsedTime(bool update_elapsed)
 	std::string tracklength;
 
 	drawTitle(np);
+
+	// Radio streams keep the same song ID while their ICY metadata changes
+	// from track to track, so Changes::songID() never fires for them. Poll the
+	// current track here (elapsedTime runs every second) so that lyrics follow
+	// the music instead of remaining stuck on the previous track.
+	if (np.isStream()
+	    && Config.now_playing_lyrics
+	    && isVisible(myLyrics)
+	    && myLyrics->previousScreen() == myPlaylist)
+		myLyrics->fetch(np);
+
 	switch (Config.design)
 	{
 		case Design::Classic:

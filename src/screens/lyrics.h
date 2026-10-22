@@ -98,6 +98,9 @@ private:
 	std::shared_ptr<std::atomic<bool>> m_download_stopper;
 
 	MPD::Song m_song;
+	// Artist + title of the stream track whose lyrics were last requested
+	// (used to detect ICY metadata changes with an unchanged URI).
+	std::string m_stream_track;
 	LyricsFetcher *m_fetcher;
 	boost::BOOST_THREAD_FUTURE<LyricsFetcher::Result> m_worker;
 

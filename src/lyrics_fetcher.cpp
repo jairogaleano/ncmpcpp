@@ -543,6 +543,12 @@ LyricsFetcher::Result TagsLyricsFetcher::fetch([[maybe_unused]] const std::strin
 	LyricsFetcher::Result result;
 	result.first = false;
 
+	if (song.isStream())
+	{
+		result.second = "Not a local file";
+		return result;
+	}
+
 	std::string path;
 	if (song.isFromDatabase())
 		path += Config.mpd_music_dir;

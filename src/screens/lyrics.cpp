@@ -19,6 +19,7 @@
  ***************************************************************************/
 
 #include <boost/algorithm/string/classification.hpp>
+#include <boost/algorithm/string/trim.hpp>
 #include <boost/filesystem/operations.hpp>
 #include <boost/range/algorithm_ext/erase.hpp>
 #include <cassert>
@@ -59,6 +60,36 @@ std::string removeExtension(std::string filename)
 	return filename;
 }
 
+/* Radio streams usually expose the current track as "Artist - Title" in the
+ * Title tag (ICY metadata) while leaving Artist empty. Split it so that lyrics
+ * are looked up per track instead of per station name. Returns false when the
+ * song is not a stream or the title does not follow that convention. */
+bool splitStreamTitle(const MPD::Song &s, std::string &artist, std::string &title)
+{
+	if (!s.isStream())
+		return false;
+	std::string raw = s.getTitle();
+	if (raw.empty())
+		return false;
+	size_t pos = raw.find(" - ");
+	size_t separator_length = 3;
+	if (pos == std::string::npos)
+	{
+		// En dash, as sent by some stations.
+		pos = raw.find(" \xE2\x80\x93 ");
+		separator_length = 5;
+	}
+	if (pos == std::string::npos || pos == 0)
+		return false;
+	std::string artist_ = boost::trim_copy(raw.substr(0, pos));
+	std::string title_ = boost::trim_copy(raw.substr(pos + separator_length));
+	if (artist_.empty() || title_.empty())
+		return false;
+	artist = artist_;
+	title = title_;
+	return true;
+}
+
 std::string lyricsFilename(const MPD::Song &s)
 {
 	std::string filename;
@@ -74,7 +105,14 @@ std::string lyricsFilename(const MPD::Song &s)
 		std::string artist = s.getArtist();
 		std::string title  = s.getTitle();
 		if (artist.empty() || title.empty())
-			filename = removeExtension(s.getName());
+		{
+			// For radio streams prefer "Artist - Title" from the ICY metadata,
+			// falling back to the station name (old behavior) if unavailable.
+			if (!splitStreamTitle(s, artist, title))
+				filename = removeExtension(s.getName());
+			else
+				filename = artist + " - " + title;
+		}
 		else
 			filename = artist + " - " + title;
 		removeInvalidCharsFromFilename(filename, Config.generate_win32_compatible_filenames);
@@ -131,13 +169,17 @@ LyricsFetcher::Result downloadLyrics(
 	// results for google search based lyrics fetchers.
 	if (s_artist.empty() || s_title.empty())
 	{
-		s_artist.clear();
-		s_title = s.getName();
-		// Get rid of underscores to improve search results.
-		std::replace_if(s_title.begin(), s_title.end(), boost::is_any_of("-_"), ' ');
-		size_t dot = s_title.rfind('.');
-		if (dot != std::string::npos)
-			s_title.resize(dot);
+		bool stream_title_split = splitStreamTitle(s, s_artist, s_title);
+		if (!stream_title_split)
+		{
+			s_artist.clear();
+			s_title = s.getName();
+			// Get rid of underscores to improve search results.
+			std::replace_if(s_title.begin(), s_title.end(), boost::is_any_of("-_"), ' ');
+			size_t dot = s_title.rfind('.');
+			if (dot != std::string::npos)
+				s_title.resize(dot);
+		}
 	}
 
 	auto fetch_lyrics = [&](auto &fetcher_) {
@@ -272,9 +314,23 @@ std::wstring Lyrics::title()
 
 void Lyrics::fetch(const MPD::Song &s)
 {
-	if (!m_worker.valid() || s != m_song)
+	const bool stream = s.isStream();
+	std::string stream_track;
+	if (stream)
+		stream_track = s.getArtist() + "\n" + s.getTitle();
+
+	// Radio streams keep the same URI (and song ID) while their ICY metadata
+	// changes from track to track, so Song::operator== alone would consider
+	// every track the same song. Status::Changes::elapsedTime() polls this
+	// once per second while a stream is playing: only start a new download
+	// when the track changes.
+	if (stream && stream_track == m_stream_track)
+		return;
+
+	if (!m_worker.valid() || s != m_song || stream)
 	{
 		stopDownload();
+		m_stream_track = stream_track;
 		w.clear();
 		w.reset();
 		m_song = s;
@@ -307,6 +363,7 @@ void Lyrics::refetchCurrent()
 	else
 	{
 		clearWorker();
+		m_stream_track.clear();
 		fetch(m_song);
 	}
 }
@@ -358,24 +415,14 @@ void Lyrics::toggleFetcher()
 		Statusbar::print("Using all lyrics fetchers");
 }
 
-/* For HTTP(S) streams, fetchInBackground makes ncmpcpp crash: the lyrics_file
- * gets set to the stream URL, which is too long, hence
- * boost::filesystem::exists() fails.
- * Possible solutions:
- * - truncate the URL and use that as a filename. Problem: resulting filename
- *   might not be unique.
- * - generate filenames in a different way for streams. Problem: what is a good
- *   method for this? Perhaps hashing -- but then the lyrics filenames are not
- *   informative.
- * - skip fetching lyrics for streams with URLs that are too long. Problem:
- *   this leads to inconsistent behavior since lyrics will be fetched for some
- *   streams but not others.
- * - avoid fetching lyrics for streams altogether.
- *
- * We choose the last solution, and ignore streams when fetching lyrics. This
- * is because fetching lyrics for a stream may not be accurate (streams do not
- * always provide the necessary metadata to look up lyrics reliably).
- * Furthermore, fetching lyrics for streams is not necessarily desirable.
+/* For HTTP(S) streams, fetchInBackground used to crash: the lyrics_file got
+ * set to the stream URL, which is too long, hence boost::filesystem::exists()
+ * failed. lyricsFilename() now names stream lyrics after the ICY "Artist -
+ * Title" metadata (or the station name as fallback), so it no longer uses the
+ * URL and streams can be fetched. The error_code overload of exists() is used
+ * as a safety net for pathological station names.
+ * Note that streams whose metadata does not follow "Artist - Title" fall back
+ * to the old behavior (the station name), which usually finds nothing.
  */
 void Lyrics::fetchInBackground(const MPD::Song &s, bool notify_)
 {
@@ -394,9 +441,9 @@ void Lyrics::fetchInBackground(const MPD::Song &s, bool notify_)
 				}
 				lyrics_file = lyricsFilename(consumer->songs.front().song());
 
-				// For long filenames (e.g. http(s) stream URLs), boost::filesystem::exists() fails.
-				// This if condition is fine, because evaluation order is guaranteed.
-				if (!consumer->songs.front().song().isStream() && !boost::filesystem::exists(lyrics_file))
+				boost::system::error_code ec;
+				bool lyrics_exist = boost::filesystem::exists(lyrics_file, ec);
+				if (!ec && !lyrics_exist)
 				{
 					cs = consumer->songs.front();
 					if (cs.notify())
@@ -408,7 +455,7 @@ void Lyrics::fetchInBackground(const MPD::Song &s, bool notify_)
 				}
 				consumer->songs.pop();
 			}
-			if (!cs.song().empty() && !cs.song().isStream())
+			if (!cs.song().empty())
 			{
 				auto lyrics = downloadLyrics(cs.song(), nullptr, nullptr, m_fetcher);
 				if (lyrics.first)
